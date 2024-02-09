@@ -1,0 +1,45 @@
+# Notes:
+# Must run on docker image that has checkov, terraform-docs and terraform fmt installed
+
+variables:
+  GITLAB_USER_EMAIL: ""       # The email for the gitlab bot 
+  GITLAB_BOT_NAME: ""         # Name of the gitlab bot created that has permissions to modify this project
+  GITLAB_BOT_ACCESS_TOKEN: "" # The Gitlab Bot Access Token to Authenticate to project
+  GITLAB_INSTANCE_URL: ""     # The URL for the gitlab instance (ex. gitlab.us.test.com)
+
+workflow:
+  rules:
+    - if: $CI_COMMIT_REF_NAME == "main"
+      when: never
+      # If a merge request is created run tests, but do not run if the user is gitlab_bot (gitlab_bot pushes terraform formatting to branch.)
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $GITLAB_USER_NAME != $GITLAB_BOT_NAME'
+
+stages:
+  - terraform_docs_and_format
+  - checkov
+
+# This Stage will format all the terraform and automatically create terraform documentation
+terraform_docs_and_format:
+  stage: terraform_docs_and_format
+  script:
+    - git config --global user.email "$GITLAB_USER_EMAIL"
+    - git config --global user.name "$GITLAB_BOT_NAME"
+    - git clone --branch $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME https://$GITLAB_BOT_NAME:$GITLAB_BOT_ACCESS_TOKEN@$GITLAB_INSTANCE_URL/$CI_MERGE_REQUEST_SOURCE_PROJECT_PATH.git
+    - cd $CI_PROJECT_NAME
+    - terraform-docs markdown . | tee README.md # Run Terraform docs
+    - terraform fmt -write=true -diff -recursive # Run Terraform format
+    - git add .
+    - "git commit -m 'terraform-docs and terraform-fmt: automated action' || echo 'No changes to commit'"
+    - git push
+
+# This Stage will output the results of the Tests to Gitlab
+checkov:
+  stage: checkov
+  needs: []
+  script:
+    - checkov -d . -o junitxml | tee $CI_PROJECT_DIR/checkov.test.xml
+  artifacts:
+    reports:
+      junit: "checkov.test.xml"
+    paths:
+      - "$CI_PROJECT_DIR/checkov.test.xml"
